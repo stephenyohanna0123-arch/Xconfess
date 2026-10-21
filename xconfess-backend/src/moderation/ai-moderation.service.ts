@@ -1,7 +1,7 @@
 // src/moderation/ai-moderation.service.ts
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import axios from 'axios';
+import { outboundFetch } from '../common/security/outbound-url-policy';
 
 export enum ModerationCategory {
   HATE_SPEECH = 'hate_speech',
@@ -111,19 +111,25 @@ export class AiModerationService {
     if (!this.openAiApiKey) return null;
 
     try {
-      const response = await axios.post(
+      const response = await outboundFetch(
         'https://api.openai.com/v1/moderations',
-        { input: content },
         {
+          method: 'POST',
           headers: {
             Authorization: `Bearer ${this.openAiApiKey}`,
             'Content-Type': 'application/json',
           },
-          timeout: 5000,
+          body: JSON.stringify({ input: content }),
+          timeoutMs: 5000,
         },
       );
 
-      const result = response.data.results[0];
+      if (!response.ok) {
+        throw new Error(`OpenAI moderation returned HTTP ${response.status}`);
+      }
+
+      const data = (await response.json()) as any;
+      const result = data.results[0];
       const flags: ModerationCategory[] = [];
       const details: Record<string, number> = {};
 
@@ -188,22 +194,31 @@ export class AiModerationService {
     if (!this.perspectiveApiKey) return null;
 
     try {
-      const response = await axios.post(
+      const response = await outboundFetch(
         `https://commentanalyzer.googleapis.com/v1alpha1/comments:analyze?key=${this.perspectiveApiKey}`,
         {
-          comment: { text: content },
-          requestedAttributes: {
-            TOXICITY: {},
-            SEVERE_TOXICITY: {},
-            IDENTITY_ATTACK: {},
-            INSULT: {},
-            THREAT: {},
-          },
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            comment: { text: content },
+            requestedAttributes: {
+              TOXICITY: {},
+              SEVERE_TOXICITY: {},
+              IDENTITY_ATTACK: {},
+              INSULT: {},
+              THREAT: {},
+            },
+          }),
+          timeoutMs: 5000,
         },
-        { timeout: 5000 },
       );
 
-      const attributes = response.data.attributeScores;
+      if (!response.ok) {
+        throw new Error(`Perspective API returned HTTP ${response.status}`);
+      }
+
+      const data = (await response.json()) as any;
+      const attributes = data.attributeScores;
       const flags: ModerationCategory[] = [];
       const details: Record<string, number> = {};
 

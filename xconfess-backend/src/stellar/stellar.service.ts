@@ -18,6 +18,7 @@ import {
   StellarEndpointPool,
   StellarEndpointPoolError,
 } from './stellar-endpoint-pool.service';
+import { outboundFetch } from '../common/security/outbound-url-policy';
 
 export interface AnchorData {
   stellarTxHash: string;
@@ -773,7 +774,7 @@ export class StellarService {
             'verification',
             'confirmation',
             () =>
-              fetch(`${server.serverURL}/transactions/${txHash}`, {
+              outboundFetch(`${server.serverURL}/transactions/${txHash}`, {
                 signal: controller.signal,
               }),
           );
@@ -1017,7 +1018,7 @@ export class StellarService {
 
         let response: Response;
         try {
-          response = await fetch(this.getHorizonTxUrl(txHash), {
+          response = await outboundFetch(this.getHorizonTxUrl(txHash), {
             signal: controller.signal,
           });
         } finally {

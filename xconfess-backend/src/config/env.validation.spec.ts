@@ -38,6 +38,35 @@ describe('Environment Validation', () => {
     expect(value.CONFESSION_ENCRYPTION_KEY).toBe(validKey);
   });
 
+  it('should accept exact HTTPS outbound origins', () => {
+    const config = {
+      ...baseConfig,
+      CONFESSION_ENCRYPTION_KEY: validKey,
+      OUTBOUND_ALLOWED_ORIGINS:
+        'https://horizon-testnet.stellar.org,https://api.openai.com',
+    };
+
+    const { error } = envValidationSchema.validate(config);
+
+    expect(error).toBeUndefined();
+  });
+
+  it.each([
+    'http://api.example.com',
+    'https://api.example.com/path',
+    'https://api.example.com,not-a-url',
+  ])('should reject invalid outbound origin configuration: %s', (origins) => {
+    const config = {
+      ...baseConfig,
+      CONFESSION_ENCRYPTION_KEY: validKey,
+      OUTBOUND_ALLOWED_ORIGINS: origins,
+    };
+
+    const { error } = envValidationSchema.validate(config);
+
+    expect(error?.message).toContain('OUTBOUND_ALLOWED_ORIGINS');
+  });
+
   it('should validate traction exclusion IDs without sensitive personal values', () => {
     const config = {
       ...baseConfig,
