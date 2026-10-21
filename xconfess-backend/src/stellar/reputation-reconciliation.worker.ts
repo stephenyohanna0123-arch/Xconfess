@@ -6,6 +6,7 @@ import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Tip, TipVerificationStatus } from '../tipping/entities/tip.entity';
 import { AnonymousConfession } from '../confession/entities/confession.entity';
+import { outboundFetch } from '../common/security/outbound-url-policy';
 
 export interface ReputationDiscrepancy {
   confessionId: string;
@@ -159,7 +160,7 @@ export class ReputationReconciliationWorker {
   ): Promise<number | null> {
     try {
       const url = `${this.horizonUrl}/transactions/${encodeURIComponent(txId)}`;
-      const resp = await fetch(url, {
+      const resp = await outboundFetch(url, {
         headers: { Accept: 'application/json' },
         signal: AbortSignal.timeout(10_000),
       });
