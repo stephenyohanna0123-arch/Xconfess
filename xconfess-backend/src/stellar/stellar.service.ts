@@ -18,6 +18,11 @@ import {
   StellarEndpointPool,
   StellarEndpointPoolError,
 } from './stellar-endpoint-pool.service';
+import {
+  combineSignals,
+  isCancelled,
+} from '../common/cancellation/cancellation';
+import { CancellationContext } from '../common/cancellation/cancellation-context';
 
 export interface AnchorData {
   stellarTxHash: string;
@@ -757,9 +762,18 @@ export class StellarService {
 
   /**
    * Verify a transaction exists on the Stellar network
+   *
+   * The request cancellation signal (issue #182) is combined with the RPC
+   * timeout so a disconnected client stops the provider call instead of
+   * keeping the connection busy for a result nobody will read.
    */
   async verifyTransaction(txHash: string, requestId?: string): Promise<boolean> {
     if (!this.isValidTxHash(txHash)) {
+      return false;
+    }
+
+    const callerSignal = CancellationContext.getSignal();
+    if (isCancelled(callerSignal)) {
       return false;
     }
 
@@ -768,13 +782,14 @@ export class StellarService {
         const controller = new AbortController();
         const timeoutMs = this.stellarConfig.getConfig().rpcTimeoutMs;
         const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        const combined = combineSignals([controller.signal, callerSignal]);
         try {
           const response = await this.measurePhase(
             'verification',
             'confirmation',
             () =>
               fetch(`${server.serverURL}/transactions/${txHash}`, {
-                signal: controller.signal,
+                signal: combined.signal,
               }),
           );
           if (!response.ok) {
@@ -783,11 +798,20 @@ export class StellarService {
           return (await response.json()) as { successful?: boolean };
         } finally {
           clearTimeout(timeoutId);
+          combined.dispose();
         }
       });
 
       return data?.successful === true;
     } catch (error: unknown) {
+      if (isCancelled(callerSignal)) {
+        this.logger.warn({
+          message: 'Stellar transaction verification cancelled by the caller',
+          requestId,
+          txHash,
+        });
+        return false;
+      }
       this.logger.error({
         message: `Error verifying Stellar transaction: ${this.describePoolError(error)}`,
         requestId,

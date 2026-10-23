@@ -7,6 +7,7 @@ import {
 import { Test, TestingModule } from '@nestjs/testing';
 import { AdminGuard } from '../auth/admin.guard';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { CapabilityGuard } from '../auth/capabilities/capability.guard';
 import { AiModerationService } from './ai-moderation.service';
 import { ModerationRepositoryService } from './moderation-repository.service';
 import { LanguageEvaluationService } from './language-evaluation.service';
@@ -70,6 +71,7 @@ describe('ModerationController language evaluation', () => {
     expect(Reflect.getMetadata(GUARDS_METADATA, ModerationController)).toEqual([
       JwtAuthGuard,
       AdminGuard,
+      CapabilityGuard,
     ]);
     expect(
       Reflect.getMetadata(

@@ -110,12 +110,16 @@ export class DataExportService {
     }
 
     // 1a. Duplicate-submission guard: reject if a job is already PENDING or PROCESSING.
-    const activeJob = await this.exportRepository.findOne({
-      where: [
-        { userId, status: 'PENDING' },
-        { userId, status: 'PROCESSING' },
-      ],
-    });
+    // Read-only work is cancellable: a disconnected client must not keep the
+    // connection busy (issue #182).
+    const activeJob = await runWithCancellation(() =>
+      this.exportRepository.findOne({
+        where: [
+          { userId, status: 'PENDING' },
+          { userId, status: 'PROCESSING' },
+        ],
+      }),
+    );
 
     if (activeJob) {
       throw new ConflictException(
@@ -127,16 +131,23 @@ export class DataExportService {
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-    const recentRequest = await this.exportRepository.findOne({
-      where: {
-        userId,
-        createdAt: MoreThan(sevenDaysAgo),
-      },
-    });
+    const recentRequest = await runWithCancellation(() =>
+      this.exportRepository.findOne({
+        where: {
+          userId,
+          createdAt: MoreThan(sevenDaysAgo),
+        },
+      }),
+    );
 
     if (recentRequest) {
       throw new BadRequestException('Export allowed once every 7 days.');
     }
+
+    // Critical section: the export record and its queued job are created
+    // together. Cancellation is checked *before* the section starts so the
+    // write is never abandoned half-way (committed writes stay consistent).
+    throwIfCancelled();
 
     // 2. Create record — stamp queuedAt immediately
     const now = new Date();

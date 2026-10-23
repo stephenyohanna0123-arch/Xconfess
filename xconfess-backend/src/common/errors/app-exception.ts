@@ -6,6 +6,8 @@ export interface AppExceptionResponse {
   code: ErrorCode;
   details?: any;
   retryAfter?: number;
+  /** True when the failure is transient and safe for the client to retry. */
+  retryable?: boolean;
 }
 
 export class AppException extends HttpException {
@@ -15,8 +17,18 @@ export class AppException extends HttpException {
     status: HttpStatus = HttpStatus.INTERNAL_SERVER_ERROR,
     details?: any,
     retryAfter?: number,
+    retryable: boolean = false,
   ) {
-    super({ message, code, details, retryAfter }, status);
+    super(
+      {
+        message,
+        code,
+        details,
+        retryAfter,
+        ...(retryable ? { retryable: true } : {}),
+      },
+      status,
+    );
   }
 
   static fromHttpException(exception: HttpException): AppException {
@@ -26,6 +38,7 @@ export class AppException extends HttpException {
     let code = ErrorCode.INTERNAL_SERVER_ERROR;
     let details: any;
     let retryAfter: number | undefined;
+    let retryable: boolean = false;
 
     if (typeof response === 'object' && response !== null) {
       const res = response as any;
@@ -33,12 +46,20 @@ export class AppException extends HttpException {
       code = res.code || this.mapStatusToCode(status);
       details = res.details;
       retryAfter = res.retryAfter;
+      retryable = res.retryable === true;
     } else {
       message = typeof response === 'string' ? response : message;
       code = this.mapStatusToCode(status);
     }
 
-    return new AppException(message, code as ErrorCode, status, details, retryAfter);
+    return new AppException(
+      message,
+      code as ErrorCode,
+      status,
+      details,
+      retryAfter,
+      retryable,
+    );
   }
 
   private static mapStatusToCode(status: number): ErrorCode {

@@ -1,5 +1,5 @@
-import { Test, TestingModule } from '@nest/testing';
-import { ExecutionContext, ForbiddenException } from '@nestjms/common';
+import { Test, TestingModule } from '@nestjs/testing';
+import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { AdminGuard } from './admin.guard';
 import { UserRole } from '../user/entities/user.entity';
 

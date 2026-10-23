@@ -11,6 +11,10 @@ import { ExportRequest } from '../../data-export/entities/export-request.entity'
 import { ExportChunk } from '../../data-export/entities/export-chunk.entity';
 import { Report } from '../entities/report.entity';
 import { ModerationEvidence } from '../../moderation/entities/moderation-evidence.entity';
+import {
+  isStatementTimeoutError,
+  toStatementTimeoutException,
+} from '../../database/query-timeout';
 
 export enum CrossDomainIntegrityErrorCode {
   IDENTITY_ORPHAN_USER_LINK = 'ERR_INTEGRITY_IDENTITY_ORPHAN_USER_LINK',
@@ -216,6 +220,12 @@ export class CrossDomainIntegrityService {
       const result = await Promise.race([checkPromise, timeoutPromise]);
       return result;
     } catch (err: any) {
+      // Issue #185: a server-side statement timeout (bounded by the
+      // transaction-local `statement_timeout`) must surface as a stable,
+      // retryable error — never raw SQL text or driver internals.
+      if (isStatementTimeoutError(err)) {
+        throw toStatementTimeoutException(err);
+      }
       return {
         name: 'Check execution failure',
         domain: 'identity',

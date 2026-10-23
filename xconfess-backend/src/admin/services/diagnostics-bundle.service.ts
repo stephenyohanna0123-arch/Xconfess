@@ -3,6 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { redactLogPayload } from '../../common/logging/log-redaction';
+import {
+  runWithCancellation,
+  throwIfCancelled,
+} from '../../common/cancellation/cancellation';
 
 /**
  * Fields that MUST NOT appear in the diagnostics bundle under any
@@ -76,6 +80,9 @@ export class DiagnosticsBundleService {
     const bundleId = `diag-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const collectedAt = new Date().toISOString();
 
+    // Issue #182: the bundle fans out several bounded-but-expensive database
+    // queries. When the caller disconnects the work is abandoned instead of
+    // holding connections open for a result nobody will read.
     const [
       meta,
       versions,
@@ -84,15 +91,17 @@ export class DiagnosticsBundleService {
       queues,
       recentErrors,
       config,
-    ] = await Promise.allSettled([
-      this.collectMeta(bundleId, collectedAt),
-      this.collectVersions(),
-      this.collectHealth(),
-      this.collectMigrations(),
-      this.collectQueueCounts(),
-      this.collectRecentErrors(windowMinutes),
-      this.collectSafeConfig(),
-    ]);
+    ] = await runWithCancellation(() =>
+      Promise.allSettled([
+        this.collectMeta(bundleId, collectedAt),
+        this.collectVersions(),
+        this.collectHealth(),
+        this.collectMigrations(),
+        this.collectQueueCounts(),
+        this.collectRecentErrors(windowMinutes),
+        this.collectSafeConfig(),
+      ]),
+    );
 
     return {
       bundleId,
@@ -146,6 +155,7 @@ export class DiagnosticsBundleService {
   }
 
   private async collectHealth(): Promise<Record<string, unknown>> {
+    throwIfCancelled();
     const checks: Record<string, unknown> = {};
 
     // Database
@@ -166,6 +176,7 @@ export class DiagnosticsBundleService {
   }
 
   private async collectMigrations(): Promise<Record<string, unknown>> {
+    throwIfCancelled();
     try {
       const rows = await this.dataSource.query<
         { name: string; timestamp: string }[]
@@ -183,6 +194,7 @@ export class DiagnosticsBundleService {
   }
 
   private async collectQueueCounts(): Promise<Record<string, unknown>> {
+    throwIfCancelled();
     // Count pending / failed jobs by reading from BullMQ's Redis key patterns
     // via the database connection is not available here; we query BullMQ keys
     // through the dataSource if possible, otherwise skip.
@@ -212,6 +224,7 @@ export class DiagnosticsBundleService {
   private async collectRecentErrors(
     windowMinutes: number,
   ): Promise<Record<string, unknown>> {
+    throwIfCancelled();
     try {
       // Gather distinct error-class patterns from audit_logs in the time window.
       // We look at failed_login, webhook_rejected, and notification actions as

@@ -541,4 +541,48 @@ export const envValidationSchema = Joi.object({
   INTEGRITY_CHECK_MAX_TIMEOUT_MS: Joi.number().min(100).max(60000).default(30000),
   INTEGRITY_CHECK_DEFAULT_LIMIT: Joi.number().min(1).max(200).default(50),
   INTEGRITY_CHECK_MAX_LIMIT: Joi.number().min(1).max(1000).default(200),
+
+  // ── Bounded statement timeouts for high-cost database operations (#185) ─────
+  DB_STATEMENT_TIMEOUT_MS: Joi.number()
+    .min(100)
+    .max(60000)
+    .default(5000)
+    .messages({
+      'number.max':
+        'DB_STATEMENT_TIMEOUT_MS must not exceed 60000 ms (1 minute).',
+    }),
+  DB_STATEMENT_TIMEOUT_MAX_MS: Joi.number()
+    .min(100)
+    .max(120000)
+    .default(30000)
+    .messages({
+      'number.max':
+        'DB_STATEMENT_TIMEOUT_MAX_MS must not exceed 120000 ms (2 minutes).',
+    }),
+
+  // ── Route-specific request/response size budgets (#181) ────────────────────
+  REQUEST_DEFAULT_MAX_BYTES: Joi.number()
+    .min(1024)
+    .max(1048576)
+    .default(102400)
+    .messages({
+      'number.max':
+        'REQUEST_DEFAULT_MAX_BYTES must not exceed 1048576 bytes (1 MiB).',
+    }),
+  REQUEST_SIZE_LIMITS: Joi.string()
+    .allow('')
+    .pattern(/^\s*\{.*\}\s*$/, {
+      name: 'requestSizeLimits',
+      description:
+        'REQUEST_SIZE_LIMITS must be a JSON object of budget name -> bytes.',
+    })
+    .optional(),
+  REQUEST_MAX_NESTING_DEPTH: Joi.number()
+    .min(1)
+    .max(32)
+    .default(8)
+    .messages({
+      'number.max':
+        'REQUEST_MAX_NESTING_DEPTH must not exceed 32 levels of nesting.',
+    }),
 }).options({ allowUnknown: true, abortEarly: false });

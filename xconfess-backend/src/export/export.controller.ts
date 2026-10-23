@@ -9,6 +9,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { OwnershipGuard } from '../common/guards/ownership.guard';
 import { Ownership } from '../common/decorators/ownership.decorator';
+import { CAPABILITY_EXPORT_DATA } from '../auth/capabilities/capability.constants';
 import { DataExportService } from '../data-export/data-export.service';
 
 /**
@@ -26,7 +27,11 @@ export class ExportController {
    * A user can only retrieve their own export jobs.
    */
   @Get('jobs/:userId')
-  @Ownership({ paramKey: 'userId', adminBypass: true })
+  @Ownership({
+    paramKey: 'userId',
+    adminBypass: true,
+    adminBypassCapability: CAPABILITY_EXPORT_DATA,
+  })
   async getExportJobs(@Param('userId') userId: string, @Req() req: any) {
     // OwnershipGuard already enforced userId === req.user.sub.
     // ExportService receives the verified caller ID — never trust the param alone.
@@ -37,7 +42,11 @@ export class ExportController {
    * GET /export/jobs/:userId/:jobId/download
    */
   @Get('jobs/:userId/:jobId/download')
-  @Ownership({ paramKey: 'userId', adminBypass: true })
+  @Ownership({
+    paramKey: 'userId',
+    adminBypass: true,
+    adminBypassCapability: CAPABILITY_EXPORT_DATA,
+  })
   async downloadExportJob(
     @Param('userId') userId: string,
     @Param('jobId') jobId: string,

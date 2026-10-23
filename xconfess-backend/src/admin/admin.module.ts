@@ -18,6 +18,8 @@ import { UserAnonymousUser } from '../user/entities/user-anonymous-link.entity';
 import { WebSocketLogger } from '../websocket/websocket.logger';
 import { WsRolesGuard } from '../auth/guards/ws-roles.guard';
 import { Reflector } from '@nestjs/core';
+import { CapabilityPolicyService } from '../auth/capabilities/capability-policy.service';
+import { CapabilityGuard } from '../auth/capabilities/capability.guard';
 import { Tip } from '../tipping/entities/tip.entity';
 import { AuditLogModule } from '../audit-log/audit-log.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -71,6 +73,8 @@ import { AdminActionApproval } from './entities/admin-action-approval.entity';
     WebSocketLogger,
     WsRolesGuard,
     Reflector,
+    CapabilityPolicyService,
+    CapabilityGuard,
     TemplatesService, // Added
     DiagnosticsBundleService,
     CrossDomainIntegrityService,
@@ -82,6 +86,8 @@ import { AdminActionApproval } from './entities/admin-action-approval.entity';
     TemplatesService, // Added
     DiagnosticsBundleService,
     CrossDomainIntegrityService,
+    CapabilityPolicyService,
+    CapabilityGuard,
   ],
 })
 export class AdminModule {}

@@ -13,6 +13,7 @@ import {
   IsBoolean,
   IsEnum,
   IsArray,
+  ArrayMaxSize,
   ValidateIf,
   Matches,
 } from 'class-validator';
@@ -166,6 +167,7 @@ export class SearchConfessionDto {
   })
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(20, { message: 'Maximum 20 tags allowed per search' })
   @IsString({ each: true })
   @Transform(({ value }) => {
     if (typeof value === 'string') {

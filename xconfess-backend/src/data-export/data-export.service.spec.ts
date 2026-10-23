@@ -14,6 +14,8 @@ import { ExportChunk } from './entities/export-chunk.entity';
 import { User } from '../user/entities/user.entity';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { EXPORT_QUEUE_NAME } from './data-export.constants';
+import { CancellationContext } from '../common/cancellation/cancellation-context';
+import { ErrorCode } from '../common/errors/error-codes';
 
 describe('DataExportService', () => {
   let service: DataExportService;
@@ -226,6 +228,51 @@ describe('DataExportService', () => {
     expect(mockExportRepository.save).not.toHaveBeenCalled();
     expect(mockExportQueue.add).not.toHaveBeenCalled();
     expect(mockAuditLogService.logExportLifecycleEvent).not.toHaveBeenCalled();
+  });
+
+  // ── request cancellation (issue #182) ──────────────────────────────────────
+
+  it('does not persist an export when the request was cancelled mid-flight', async () => {
+    const controller = new AbortController();
+
+    // The client disconnects while the guard queries are running.
+    mockExportRepository.findOne.mockImplementation(async () => {
+      controller.abort();
+      return null;
+    });
+
+    let caught: any;
+    try {
+      await CancellationContext.run(controller.signal, () =>
+        service.requestExport('42'),
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeDefined();
+    const response: any = caught.getResponse();
+    expect(response.code).toBe(ErrorCode.REQUEST_CANCELLED);
+
+    // A cancelled request must not leave a half-created export behind.
+    expect(mockExportRepository.save).not.toHaveBeenCalled();
+    expect(mockExportQueue.add).not.toHaveBeenCalled();
+    expect(mockAuditLogService.logExportLifecycleEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not start work for an already cancelled request', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      CancellationContext.run(controller.signal, () =>
+        service.requestExport('42'),
+      ),
+    ).rejects.toBeInstanceOf(Error);
+
+    expect(mockExportRepository.findOne).not.toHaveBeenCalled();
+    expect(mockExportRepository.save).not.toHaveBeenCalled();
+    expect(mockExportQueue.add).not.toHaveBeenCalled();
   });
 
   // ── markExportProcessing ───────────────────────────────────────────────────

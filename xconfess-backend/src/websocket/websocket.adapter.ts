@@ -2,6 +2,7 @@ import { IoAdapter } from '@nestjs/platform-socket.io';
 import { ServerOptions } from 'socket.io';
 import { ConfigService } from '@nestjs/config';
 import { INestApplicationContext, Logger } from '@nestjs/common';
+import { createRequestCancellation } from '../common/cancellation/cancellation';
 
 const logger = new Logger('WebSocketAdapter');
 
@@ -76,6 +77,22 @@ export class WebSocketAdapter extends IoAdapter {
         socket.handshake?.auth?.token ||
         socket.handshake?.headers?.authorization,
       );
+
+      /**
+       * Per-socket cancellation handle (issue #182).
+       *
+       * When the client disconnects the signal is aborted so in-flight
+       * database or provider work started by this socket can stop instead of
+       * running for a result nobody will read.
+       */
+      const cancellation = createRequestCancellation();
+      socket.data = socket.data || {};
+      socket.data.cancellation = cancellation;
+      socket.on('disconnect', () => {
+        if (!cancellation.controller.signal.aborted) {
+          cancellation.controller.abort();
+        }
+      });
 
       logger.log({
         event: 'WS_CONNECT',
