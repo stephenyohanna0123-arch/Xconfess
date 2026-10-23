@@ -180,7 +180,7 @@ export function attachRealtime(server: HttpServer): Server {
 
     // Reconnect cleanup: remove stale presence/typing state on disconnect.
     socket.on('disconnect', () => {
-      logger.debug({ userId }, 'realtime disconnect, cleaning presence/typing');
+      logger.debug({ userId }, 'realtime disconnect');
       cleanupUser(io, userId);
     });
   });

@@ -23,6 +23,9 @@ import {
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AdminGuard } from '../auth/admin.guard';
+import { CapabilityGuard } from '../auth/capabilities/capability.guard';
+import { RequireCapability } from '../auth/capabilities/require-capability.decorator';
+import { CAPABILITY_MODERATE_CONTENT } from '../auth/capabilities/capability.constants';
 import { AiModerationService, ModerationStatus } from './ai-moderation.service';
 import { ModerationRepositoryService } from './moderation-repository.service';
 import { InvalidModerationTransitionError } from './moderation-state-machine';
@@ -46,7 +49,8 @@ class ReviewModerationDto {
 @ApiTags('Admin - Moderation')
 @ApiBearerAuth()
 @Controller('admin/moderation')
-@UseGuards(JwtAuthGuard, AdminGuard)
+@UseGuards(JwtAuthGuard, AdminGuard, CapabilityGuard)
+@RequireCapability(CAPABILITY_MODERATE_CONTENT)
 export class ModerationController {
   constructor(
     private readonly aiModerationService: AiModerationService,

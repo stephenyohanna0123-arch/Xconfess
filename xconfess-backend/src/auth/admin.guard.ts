@@ -1,15 +1,21 @@
 import {
-  Injectable,
   CanActivate,
   ExecutionContext,
   ForbiddenException,
+  Injectable,
 } from '@nestjs/common';
-import { UserRole } from '../user/entities/user.entity';
+import { CapabilityPolicyService } from './capabilities/capability-policy.service';
 import { AuthenticatedRequest } from './interfaces/jwt-payload.interface';
 
 /**
- * AdminGuard — single source of truth for admin authorization across all HTTP and WebSocket routes.
- * Rejects unauthenticated requests and any authenticated user whose role is not ADMIN.
+ * AdminGuard — authorization boundary for privileged admin operations.
+ *
+ * Delegates the admin decision to the centralized capability policy
+ * (issue #183) so the role-to-capability mapping lives in a single place and
+ * every privileged route resolves it consistently.
+ *
+ * Rejects unauthenticated requests and any authenticated user whose role does
+ * not hold the administrative capability.
  */
 @Injectable()
 export class AdminGuard implements CanActivate {
@@ -20,8 +26,7 @@ export class AdminGuard implements CanActivate {
       throw new ForbiddenException('User is not authenticated');
     }
 
-    const userRole = String(request.user.role || '').toLowerCase();
-    const isAdmin = userRole === UserRole.ADMIN || userRole === 'admin';
+    const isAdmin = CapabilityPolicyService.isAdmin(request.user);
 
     if (!isAdmin) {
       throw new ForbiddenException('Only admins can access this endpoint');

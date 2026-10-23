@@ -16,9 +16,18 @@ import { UpdateConfessionDto } from '../confession/dto/update-confession.dto';
 import {
   COMMENT_REQUEST_MAX_BYTES,
   CONFESSION_REQUEST_MAX_BYTES,
+  createRequestBodyParser,
+  DEFAULT_MAX_NESTING_DEPTH,
   DRAFT_REQUEST_MAX_BYTES,
+  exceedsMaxNestingDepth,
+  MAX_CONFIGURABLE_REQUEST_BYTES,
   MESSAGE_REQUEST_MAX_BYTES,
   REPORT_REQUEST_MAX_BYTES,
+  REQUEST_BUDGET_COMMENTS_WRITE,
+  REQUEST_BUDGET_CONFESSIONS_WRITE,
+  REQUEST_BUDGET_DEFAULT,
+  REQUEST_BUDGET_REPORTS_WRITE,
+  resolveRequestBudgets,
   configureRequestBodyParsing,
 } from './request-body-limits';
 
@@ -135,6 +144,32 @@ function bodyAtByteSize(
   }
 
   return JSON.stringify({ ...base, padding: 'x'.repeat(paddingBytes) });
+}
+
+/**
+ * Build an app that uses explicitly configured request budgets.
+ */
+async function buildAppWithBudgets(
+  overrides: Record<string, number>,
+): Promise<INestApplication> {
+  const moduleRef = await Test.createTestingModule({
+    controllers: [TestConfessionController],
+  }).compile();
+
+  const limitedApp = moduleRef.createNestApplication({ bodyParser: false });
+  limitedApp.setGlobalPrefix('api');
+
+  const requestIdMiddleware = new RequestIdMiddleware();
+  limitedApp.use(requestIdMiddleware.use.bind(requestIdMiddleware));
+  limitedApp.use(
+    createRequestBodyParser({
+      budgets: resolveRequestBudgets({ overrides }),
+      maxNestingDepth: DEFAULT_MAX_NESTING_DEPTH,
+    }),
+  );
+
+  await limitedApp.init();
+  return limitedApp;
 }
 
 // ── Test suite ───────────────────────────────────────────────────────────────
@@ -506,6 +541,129 @@ describe('request body limits', () => {
 
       expect(res.status).toBe(413);
       expect(JSON.stringify(res.body)).not.toContain(sensitiveValue);
+    });
+  });
+
+  // ── Configurable budgets (issue #181) ─────────────────────────────────────
+
+  describe('configurable budgets', () => {
+    it('resolves overrides for known budgets and ignores unknown keys', () => {
+      const budgets = resolveRequestBudgets({
+        overrides: {
+          [REQUEST_BUDGET_CONFESSIONS_WRITE]: 4096,
+          'not-a-budget': 1024,
+        },
+      });
+
+      expect(budgets[REQUEST_BUDGET_CONFESSIONS_WRITE]).toBe(4096);
+      expect(budgets[REQUEST_BUDGET_COMMENTS_WRITE]).toBe(
+        COMMENT_REQUEST_MAX_BYTES,
+      );
+      expect(budgets['not-a-budget']).toBeUndefined();
+    });
+
+    it('ignores invalid override values instead of disabling the limit', () => {
+      const budgets = resolveRequestBudgets({
+        overrides: {
+          [REQUEST_BUDGET_CONFESSIONS_WRITE]: 0,
+          [REQUEST_BUDGET_COMMENTS_WRITE]: -1,
+          [REQUEST_BUDGET_REPORTS_WRITE]: Number.NaN,
+        } as Record<string, number>,
+      });
+
+      expect(budgets[REQUEST_BUDGET_CONFESSIONS_WRITE]).toBe(
+        CONFESSION_REQUEST_MAX_BYTES,
+      );
+      expect(budgets[REQUEST_BUDGET_COMMENTS_WRITE]).toBe(
+        COMMENT_REQUEST_MAX_BYTES,
+      );
+      expect(budgets[REQUEST_BUDGET_REPORTS_WRITE]).toBe(
+        REPORT_REQUEST_MAX_BYTES,
+      );
+    });
+
+    it('clamps a configured budget to the hard ceiling', () => {
+      const budgets = resolveRequestBudgets({
+        overrides: {
+          [REQUEST_BUDGET_DEFAULT]: MAX_CONFIGURABLE_REQUEST_BYTES * 10,
+        },
+      });
+
+      expect(budgets[REQUEST_BUDGET_DEFAULT]).toBe(
+        MAX_CONFIGURABLE_REQUEST_BYTES,
+      );
+    });
+
+    it('applies the configured default budget to unrouted paths', () => {
+      const budgets = resolveRequestBudgets({
+        defaultMaxBytes: 2048,
+      });
+
+      expect(budgets[REQUEST_BUDGET_DEFAULT]).toBe(2048);
+    });
+
+    it('rejects a body that exceeds a configured route budget', async () => {
+      const limitedApp = await buildAppWithBudgets({
+        [REQUEST_BUDGET_CONFESSIONS_WRITE]: 1024,
+      });
+
+      const body = bodyAtByteSize({ message: 'valid' }, 2048);
+
+      const res = await request(limitedApp.getHttpServer())
+        .post('/api/confessions')
+        .set('Content-Type', 'application/json')
+        .send(body);
+
+      expect(res.status).toBe(413);
+      expect(res.body.code).toBe('REQUEST_TOO_LARGE');
+      expect(confessionService.create).not.toHaveBeenCalled();
+
+      await limitedApp.close();
+    });
+  });
+
+  // ── Nested payload limits (issue #181) ────────────────────────────────────
+
+  describe('nested payload limits', () => {
+    it('rejects a body nested deeper than the configured depth', async () => {
+      const nested: Record<string, unknown> = { message: 'deep' };
+      let cursor = nested;
+      for (let i = 0; i < 12; i += 1) {
+        const child: Record<string, unknown> = {};
+        cursor.child = child;
+        cursor = child;
+      }
+
+      const res = await request(app.getHttpServer())
+        .post('/api/confessions')
+        .set('Content-Type', 'application/json')
+        .send(nested);
+
+      expect(res.status).toBe(413);
+      expect(res.body.code).toBe('REQUEST_TOO_LARGE');
+      expect(res.body.message).toBe(
+        'Request body exceeds the allowed nesting depth',
+      );
+      expect(confessionService.create).not.toHaveBeenCalled();
+    });
+
+    it('accepts a body within the nesting depth limit', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/confessions')
+        .set('Content-Type', 'application/json')
+        .send({ message: 'shallow', meta: { a: { b: 1 } } });
+
+      expect(res.status).toBe(201);
+    });
+
+    it('detects excessive nesting without recursion', () => {
+      let payload: unknown = { value: 1 };
+      for (let i = 0; i < 20; i += 1) {
+        payload = { nested: payload };
+      }
+
+      expect(exceedsMaxNestingDepth(payload, 8)).toBe(true);
+      expect(exceedsMaxNestingDepth({ a: { b: { c: 1 } } }, 8)).toBe(false);
     });
   });
 });

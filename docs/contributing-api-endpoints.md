@@ -12,6 +12,9 @@ Use this checklist when adding a new backend endpoint to `xconfess-backend`.
 - [ ] Add a controller class with `@Controller('my-feature')` and appropriate `@ApiTags`
 - [ ] Decorate every route with `@ApiOperation`, `@ApiResponse`, and `@ApiBody`/`@ApiQuery` where applicable
 - [ ] Use `@UseGuards` for auth-protected routes (`JwtAuthGuard`, `OptionalJwtAuthGuard`, or role-based guards)
+- [ ] For privileged admin routes, declare the required capability with `@RequireCapability(...)` and add `CapabilityGuard` to the guard chain — see [admin-capability-policy.md](./admin-capability-policy.md)
+- [ ] For expensive work, honour request cancellation (`runWithCancellation`) and keep write sections uninterruptible — see [request-cancellation.md](./request-cancellation.md)
+- [ ] Bound the request body and the response size of the route (named request budget, `@ResponseSizeBudget`, `@ArrayMaxSize` for client-controlled arrays) — see [request-response-size-budgets.md](./request-response-size-budgets.md)
 
 ### DTO (Data Transfer Object)
 

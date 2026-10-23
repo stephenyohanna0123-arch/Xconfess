@@ -8,8 +8,11 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { getTypeOrmConfig } from './config/database.config';
 import { envValidationSchema } from './config/env.validation';
 import appConfig from './config/app.config';
+import queryTimeoutConfig from './config/query-timeout.config';
+import requestSizeConfig from './config/request-size.config';
 import { UserModule } from './user/user.module';
 import { AuthModule } from './auth/auth.module';
+import { CapabilitiesModule } from './auth/capabilities/capabilities.module';
 import { ConfessionModule } from './confession/confession.module';
 import { ConfessionDraftModule } from './confession-draft/confession-draft.module';
 import { SearchDiscoveryModule } from './search-discovery/search-discovery.module';
@@ -45,6 +48,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { StructuredLoggingInterceptor } from './common/logging/structured-logging.interceptor';
 import { PerformanceInterceptor } from './common/interceptors/performance.interceptor';
 import { HttpCacheInterceptor } from './common/interceptors/http-cache.interceptor';
+import { ResponseSizeInterceptor } from './common/interceptors/response-size.interceptor';
 import { RateLimitModule } from './rate-limit/rate-limit.module';
 import { RateLimitGuard } from './rate-limit/rate-limit.guard';
 
@@ -53,7 +57,14 @@ import { RateLimitGuard } from './rate-limit/rate-limit.guard';
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
-      load: [throttleConfig, appConfig, exportConfig, integrityConfig],
+      load: [
+        throttleConfig,
+        appConfig,
+        exportConfig,
+        integrityConfig,
+        queryTimeoutConfig,
+        requestSizeConfig,
+      ],
       validationSchema: envValidationSchema,
       validationOptions: { abortEarly: false },
     }),
@@ -139,6 +150,7 @@ import { RateLimitGuard } from './rate-limit/rate-limit.guard';
     AnalyticsModule,
     UserModule,
     AuthModule,
+    CapabilitiesModule,
     AccountMergeModule,
     ConfessionModule,
     ConfessionDraftModule,
@@ -185,6 +197,11 @@ import { RateLimitGuard } from './rate-limit/rate-limit.guard';
     {
       provide: APP_INTERCEPTOR,
       useClass: HttpCacheInterceptor,
+    },
+    // Issue #181: response-size instrumentation and per-route response budgets.
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: ResponseSizeInterceptor,
     },
   ],
 })

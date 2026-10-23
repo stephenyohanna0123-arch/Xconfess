@@ -62,6 +62,11 @@ export const envValidationSchema = Joi.object({
     .default('development'),
   APP_ENV: Joi.string().optional(),
   PORT: Joi.number().port().default(3000),
+  MODERATION_PROVIDER_TIMEOUT_MS: Joi.number().min(500).max(10000).default(5000),
+  MODERATION_PROVIDER_MAX_ATTEMPTS: Joi.number().integer().min(1).max(3).default(2),
+  MAIL_CONNECTION_TIMEOUT_MS: Joi.number().min(500).max(30000).default(5000),
+  MAIL_GREETING_TIMEOUT_MS: Joi.number().min(500).max(30000).default(5000),
+  MAIL_SOCKET_TIMEOUT_MS: Joi.number().min(500).max(30000).default(10000),
 
   // â”€â”€ Database â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   DB_HOST: Joi.string().required().messages({
@@ -91,6 +96,11 @@ export const envValidationSchema = Joi.object({
   TYPEORM_BASELINE_EXISTING_SCHEMA: Joi.string()
     .valid('true', 'false', '1', '0', 'yes', 'no', 'on', 'off')
     .optional(),
+  ADMIN_ACTION_APPROVAL_TTL_MINUTES: Joi.number()
+    .integer()
+    .min(5)
+    .max(1440)
+    .default(30),
 
   // ---- Auth ----
   JWT_SECRET: Joi.string().min(32).required().messages({
@@ -99,6 +109,11 @@ export const envValidationSchema = Joi.object({
     'string.min':
       'JWT_SECRET must be at least 32 characters long for production-strength signing.',
   }),
+  STEP_UP_PROOF_TTL_SECONDS: Joi.number()
+    .integer()
+    .min(60)
+    .max(900)
+    .default(300),
 
   // ---- App / URLs ----
   APP_SECRET: Joi.string()
@@ -458,6 +473,22 @@ export const envValidationSchema = Joi.object({
 
   // â”€â”€ Redis queue health â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   REDIS_QUEUE_LATENCY_THRESHOLD_MS: Joi.number().default(250),
+  REDIS_QUEUE_WAIT_THRESHOLD_MS: Joi.number().integer().min(1).default(30000),
+  NOTIFICATION_WORKER_CONCURRENCY: Joi.number()
+    .integer()
+    .min(1)
+    .max(100)
+    .default(5),
+  EXPORT_WORKER_CONCURRENCY: Joi.number()
+    .integer()
+    .min(1)
+    .max(100)
+    .default(1),
+  CONFESSION_DRAFT_WORKER_CONCURRENCY: Joi.number()
+    .integer()
+    .min(1)
+    .max(100)
+    .default(1),
 
   // â”€â”€ Soroban event range verifier (read-only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   SOROBAN_EVENT_VERIFIER_ENABLED: Joi.string()
@@ -530,4 +561,48 @@ export const envValidationSchema = Joi.object({
   INTEGRITY_CHECK_MAX_TIMEOUT_MS: Joi.number().min(100).max(60000).default(30000),
   INTEGRITY_CHECK_DEFAULT_LIMIT: Joi.number().min(1).max(200).default(50),
   INTEGRITY_CHECK_MAX_LIMIT: Joi.number().min(1).max(1000).default(200),
+
+  // ── Bounded statement timeouts for high-cost database operations (#185) ─────
+  DB_STATEMENT_TIMEOUT_MS: Joi.number()
+    .min(100)
+    .max(60000)
+    .default(5000)
+    .messages({
+      'number.max':
+        'DB_STATEMENT_TIMEOUT_MS must not exceed 60000 ms (1 minute).',
+    }),
+  DB_STATEMENT_TIMEOUT_MAX_MS: Joi.number()
+    .min(100)
+    .max(120000)
+    .default(30000)
+    .messages({
+      'number.max':
+        'DB_STATEMENT_TIMEOUT_MAX_MS must not exceed 120000 ms (2 minutes).',
+    }),
+
+  // ── Route-specific request/response size budgets (#181) ────────────────────
+  REQUEST_DEFAULT_MAX_BYTES: Joi.number()
+    .min(1024)
+    .max(1048576)
+    .default(102400)
+    .messages({
+      'number.max':
+        'REQUEST_DEFAULT_MAX_BYTES must not exceed 1048576 bytes (1 MiB).',
+    }),
+  REQUEST_SIZE_LIMITS: Joi.string()
+    .allow('')
+    .pattern(/^\s*\{.*\}\s*$/, {
+      name: 'requestSizeLimits',
+      description:
+        'REQUEST_SIZE_LIMITS must be a JSON object of budget name -> bytes.',
+    })
+    .optional(),
+  REQUEST_MAX_NESTING_DEPTH: Joi.number()
+    .min(1)
+    .max(32)
+    .default(8)
+    .messages({
+      'number.max':
+        'REQUEST_MAX_NESTING_DEPTH must not exceed 32 levels of nesting.',
+    }),
 }).options({ allowUnknown: true, abortEarly: false });

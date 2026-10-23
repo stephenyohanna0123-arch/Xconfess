@@ -1,4 +1,5 @@
 import { HttpStatus, INestApplication } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { json, Request, RequestHandler, Response, urlencoded } from 'express';
 import { ErrorCode } from './errors/error-codes';
 
@@ -20,6 +21,12 @@ import { ErrorCode } from './errors/error-codes';
  *                        4 096 chars (key)   32 KiB  ← key backup can be large
  *
  * All other routes fall back to a conservative 100 KiB default.
+ *
+ * Issue #181 — every budget is named, and the byte values can be overridden
+ * per deployment through `REQUEST_SIZE_LIMITS` (see
+ * `src/config/request-size.config.ts`). Nested payloads are bounded as well:
+ * a body nested deeper than `REQUEST_MAX_NESTING_DEPTH` is rejected before
+ * it reaches a DTO.
  */
 export const CONFESSION_REQUEST_MAX_BYTES = 16 * 1024; //  16 KiB
 export const COMMENT_REQUEST_MAX_BYTES = 16 * 1024; //  16 KiB
@@ -28,52 +35,120 @@ export const DRAFT_REQUEST_MAX_BYTES = 16 * 1024; //  16 KiB
 /** Message key registration can carry a 4 096-char encrypted key backup. */
 export const MESSAGE_REQUEST_MAX_BYTES = 32 * 1024; //  32 KiB
 
-const DEFAULT_REQUEST_MAX_BYTES = 100 * 1024; // 100 KiB
+export const DEFAULT_REQUEST_MAX_BYTES = 100 * 1024; // 100 KiB
+/** Default maximum JSON nesting depth accepted in a request body. */
+export const DEFAULT_MAX_NESTING_DEPTH = 8;
+/** Hard ceiling for a single configurable budget (1 MiB). */
+export const MAX_CONFIGURABLE_REQUEST_BYTES = 1024 * 1024;
+
 const REQUEST_TOO_LARGE_MESSAGE = 'Request body exceeds the allowed size';
+const REQUEST_TOO_DEEP_MESSAGE =
+  'Request body exceeds the allowed nesting depth';
+
+/**
+ * Named request budgets. The name (not the route path) is the stable key used
+ * for configuration, so budgets survive route refactors.
+ */
+export const REQUEST_BUDGET_CONFESSIONS_WRITE = 'confessions:write';
+export const REQUEST_BUDGET_COMMENTS_WRITE = 'comments:write';
+export const REQUEST_BUDGET_REPORTS_WRITE = 'reports:write';
+export const REQUEST_BUDGET_DRAFTS_WRITE = 'drafts:write';
+export const REQUEST_BUDGET_MESSAGES_WRITE = 'messages:write';
+export const REQUEST_BUDGET_DEFAULT = 'default';
+
+export const REQUEST_BUDGET_KEYS = [
+  REQUEST_BUDGET_CONFESSIONS_WRITE,
+  REQUEST_BUDGET_COMMENTS_WRITE,
+  REQUEST_BUDGET_REPORTS_WRITE,
+  REQUEST_BUDGET_DRAFTS_WRITE,
+  REQUEST_BUDGET_MESSAGES_WRITE,
+  REQUEST_BUDGET_DEFAULT,
+] as const;
+
+export type RequestBudgetKey = (typeof REQUEST_BUDGET_KEYS)[number];
+
+export const DEFAULT_REQUEST_BUDGETS: Record<RequestBudgetKey, number> = {
+  [REQUEST_BUDGET_CONFESSIONS_WRITE]: CONFESSION_REQUEST_MAX_BYTES,
+  [REQUEST_BUDGET_COMMENTS_WRITE]: COMMENT_REQUEST_MAX_BYTES,
+  [REQUEST_BUDGET_REPORTS_WRITE]: REPORT_REQUEST_MAX_BYTES,
+  [REQUEST_BUDGET_DRAFTS_WRITE]: DRAFT_REQUEST_MAX_BYTES,
+  [REQUEST_BUDGET_MESSAGES_WRITE]: MESSAGE_REQUEST_MAX_BYTES,
+  [REQUEST_BUDGET_DEFAULT]: DEFAULT_REQUEST_MAX_BYTES,
+};
+
+export interface RequestBudgetOptions {
+  /** Per-budget byte overrides, keyed by budget name. */
+  overrides?: Record<string, number> | null;
+  /** Budget applied to routes without a specific budget. */
+  defaultMaxBytes?: number;
+}
+
+/**
+ * Resolve the effective budget for every named budget.
+ *
+ * Overrides are validated: only positive integers are applied and every value
+ * is clamped to {@link MAX_CONFIGURABLE_REQUEST_BYTES} so a configuration
+ * mistake can never remove the limit entirely.
+ */
+export function resolveRequestBudgets(
+  options: RequestBudgetOptions = {},
+): Record<RequestBudgetKey, number> {
+  const budgets = { ...DEFAULT_REQUEST_BUDGETS } as Record<
+    RequestBudgetKey,
+    number
+  >;
+
+  const defaultMaxBytes = Number(options.defaultMaxBytes);
+  if (Number.isFinite(defaultMaxBytes) && defaultMaxBytes > 0) {
+    budgets[REQUEST_BUDGET_DEFAULT] = Math.min(
+      Math.floor(defaultMaxBytes),
+      MAX_CONFIGURABLE_REQUEST_BYTES,
+    );
+  }
+
+  const overrides = options.overrides ?? {};
+  for (const key of Object.keys(overrides)) {
+    if (!REQUEST_BUDGET_KEYS.includes(key as RequestBudgetKey)) {
+      continue;
+    }
+    const bytes = Number(overrides[key]);
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+      continue;
+    }
+    budgets[key as RequestBudgetKey] = Math.min(
+      Math.floor(bytes),
+      MAX_CONFIGURABLE_REQUEST_BYTES,
+    );
+  }
+
+  return budgets;
+}
 
 // ── Pre-allocated parser instances ──────────────────────────────────────────
-const confessionJsonParser = json({ limit: CONFESSION_REQUEST_MAX_BYTES });
-const confessionUrlencodedParser = urlencoded({
-  extended: true,
-  limit: CONFESSION_REQUEST_MAX_BYTES,
-});
-
-const commentJsonParser = json({ limit: COMMENT_REQUEST_MAX_BYTES });
-const commentUrlencodedParser = urlencoded({
-  extended: true,
-  limit: COMMENT_REQUEST_MAX_BYTES,
-});
-
-const reportJsonParser = json({ limit: REPORT_REQUEST_MAX_BYTES });
-const reportUrlencodedParser = urlencoded({
-  extended: true,
-  limit: REPORT_REQUEST_MAX_BYTES,
-});
-
-const draftJsonParser = json({ limit: DRAFT_REQUEST_MAX_BYTES });
-const draftUrlencodedParser = urlencoded({
-  extended: true,
-  limit: DRAFT_REQUEST_MAX_BYTES,
-});
-
-const messageJsonParser = json({ limit: MESSAGE_REQUEST_MAX_BYTES });
-const messageUrlencodedParser = urlencoded({
-  extended: true,
-  limit: MESSAGE_REQUEST_MAX_BYTES,
-});
-
-const defaultJsonParser = json({ limit: DEFAULT_REQUEST_MAX_BYTES });
-const defaultUrlencodedParser = urlencoded({
-  extended: true,
-  limit: DEFAULT_REQUEST_MAX_BYTES,
-});
-
-// ── Route matchers ───────────────────────────────────────────────────────────
-
+// Parsers are cached per byte budget so a configured limit still reuses a
+// single parser instance instead of allocating one per request.
 type ParserPair = {
   jsonParser: RequestHandler;
   urlencodedParser: RequestHandler;
 };
+
+const parserCache = new Map<number, ParserPair>();
+
+function getParsers(limitBytes: number): ParserPair {
+  const cached = parserCache.get(limitBytes);
+  if (cached) {
+    return cached;
+  }
+
+  const parsers: ParserPair = {
+    jsonParser: json({ limit: limitBytes }),
+    urlencodedParser: urlencoded({ extended: true, limit: limitBytes }),
+  };
+  parserCache.set(limitBytes, parsers);
+  return parsers;
+}
+
+// ── Route matchers ───────────────────────────────────────────────────────────
 
 /**
  * POST /confessions
@@ -120,8 +195,7 @@ function isReportWrite(request: Request): boolean {
       /^\/confessions\/[^/]+\/report$/.test(path)) ||
     ((request.method === 'POST' || request.method === 'PATCH') &&
       /^\/admin\/reports\/[^/]+\/(action|resolve|dismiss)$/.test(path)) ||
-    (request.method === 'PATCH' &&
-      /^\/admin\/reports\/[^/]+$/.test(path))
+    (request.method === 'PATCH' && /^\/admin\/reports\/[^/]+$/.test(path))
   );
 }
 
@@ -151,36 +225,85 @@ function isDraftWrite(request: Request): boolean {
 function isMessageWrite(request: Request): boolean {
   const path = request.path.replace(/^\/api/, '');
 
-  return (
-    request.method === 'POST' &&
-    /^\/messages(\/|$)/.test(path)
-  );
+  return request.method === 'POST' && /^\/messages(\/|$)/.test(path);
 }
 
-function selectParsers(request: Request): ParserPair {
+/**
+ * Resolve the budget name that applies to a request.
+ */
+export function selectRequestBudgetKey(request: Request): RequestBudgetKey {
   // Draft check must come before confession check because draft paths
   // also start with /confessions.
   if (isDraftWrite(request)) {
-    return { jsonParser: draftJsonParser, urlencodedParser: draftUrlencodedParser };
+    return REQUEST_BUDGET_DRAFTS_WRITE;
   }
 
   if (isConfessionWrite(request)) {
-    return { jsonParser: confessionJsonParser, urlencodedParser: confessionUrlencodedParser };
+    return REQUEST_BUDGET_CONFESSIONS_WRITE;
   }
 
   if (isCommentWrite(request)) {
-    return { jsonParser: commentJsonParser, urlencodedParser: commentUrlencodedParser };
+    return REQUEST_BUDGET_COMMENTS_WRITE;
   }
 
   if (isReportWrite(request)) {
-    return { jsonParser: reportJsonParser, urlencodedParser: reportUrlencodedParser };
+    return REQUEST_BUDGET_REPORTS_WRITE;
   }
 
   if (isMessageWrite(request)) {
-    return { jsonParser: messageJsonParser, urlencodedParser: messageUrlencodedParser };
+    return REQUEST_BUDGET_MESSAGES_WRITE;
   }
 
-  return { jsonParser: defaultJsonParser, urlencodedParser: defaultUrlencodedParser };
+  return REQUEST_BUDGET_DEFAULT;
+}
+
+// ── Nested payload guard ────────────────────────────────────────────────────
+
+/**
+ * Returns true when the parsed payload nests deeper than `maxDepth`.
+ *
+ * The traversal is iterative (no recursion) so a hostile payload cannot cause
+ * a stack overflow while it is being inspected.
+ */
+export function exceedsMaxNestingDepth(
+  payload: unknown,
+  maxDepth: number,
+): boolean {
+  if (!Number.isFinite(maxDepth) || maxDepth <= 0) {
+    return false;
+  }
+
+  const stack: Array<{ value: unknown; depth: number }> = [
+    { value: payload, depth: 0 },
+  ];
+
+  while (stack.length > 0) {
+    const entry = stack.pop();
+    if (!entry) {
+      break;
+    }
+
+    if (entry.depth > maxDepth) {
+      return true;
+    }
+
+    const { value, depth } = entry;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item && typeof item === 'object') {
+          stack.push({ value: item, depth: depth + 1 });
+        }
+      }
+    } else if (value && typeof value === 'object') {
+      for (const item of Object.values(value as Record<string, unknown>)) {
+        if (item && typeof item === 'object') {
+          stack.push({ value: item, depth: depth + 1 });
+        }
+      }
+    }
+  }
+
+  return false;
 }
 
 // ── Error helpers ────────────────────────────────────────────────────────────
@@ -197,11 +320,15 @@ function isPayloadTooLarge(error: unknown): boolean {
   );
 }
 
-function sendRequestTooLarge(request: Request, response: Response): void {
+function sendRequestRejected(
+  request: Request,
+  response: Response,
+  message: string,
+): void {
   response.status(HttpStatus.PAYLOAD_TOO_LARGE).json({
     status: HttpStatus.PAYLOAD_TOO_LARGE,
     code: ErrorCode.REQUEST_TOO_LARGE,
-    message: REQUEST_TOO_LARGE_MESSAGE,
+    message,
     timestamp: new Date().toISOString(),
     path: request.originalUrl,
     requestId:
@@ -211,36 +338,95 @@ function sendRequestTooLarge(request: Request, response: Response): void {
 
 // ── Middleware ───────────────────────────────────────────────────────────────
 
-export const requestBodyParser: RequestHandler = (request, response, next) => {
-  const parsers = selectParsers(request);
+export interface RequestBodyLimitOptions {
+  budgets: Record<RequestBudgetKey, number>;
+  maxNestingDepth: number;
+}
 
-  parsers.jsonParser(request, response, (jsonError?: unknown) => {
-    if (isPayloadTooLarge(jsonError)) {
-      sendRequestTooLarge(request, response);
-      return;
-    }
+/**
+ * Build the body-parsing middleware for the given budgets.
+ */
+export function createRequestBodyParser(
+  options: RequestBodyLimitOptions,
+): RequestHandler {
+  const { budgets, maxNestingDepth } = options;
 
-    if (jsonError) {
-      next(jsonError);
-      return;
-    }
+  return (request, response, next) => {
+    const budgetKey = selectRequestBudgetKey(request);
+    const limitBytes = budgets[budgetKey] ?? DEFAULT_REQUEST_MAX_BYTES;
+    const parsers = getParsers(limitBytes);
 
-    parsers.urlencodedParser(request, response, (urlencodedError?: unknown) => {
-      if (isPayloadTooLarge(urlencodedError)) {
-        sendRequestTooLarge(request, response);
+    parsers.jsonParser(request, response, (jsonError?: unknown) => {
+      if (isPayloadTooLarge(jsonError)) {
+        sendRequestRejected(request, response, REQUEST_TOO_LARGE_MESSAGE);
         return;
       }
 
-      next(urlencodedError);
+      if (jsonError) {
+        next(jsonError);
+        return;
+      }
+
+      parsers.urlencodedParser(request, response, (urlencodedError?: unknown) => {
+        if (isPayloadTooLarge(urlencodedError)) {
+          sendRequestRejected(request, response, REQUEST_TOO_LARGE_MESSAGE);
+          return;
+        }
+
+        if (urlencodedError) {
+          next(urlencodedError);
+          return;
+        }
+
+        // Nested payloads are bounded as well: a body nested deeper than the
+        // configured depth is rejected before it reaches a DTO.
+        if (exceedsMaxNestingDepth(request.body, maxNestingDepth)) {
+          sendRequestRejected(request, response, REQUEST_TOO_DEEP_MESSAGE);
+          return;
+        }
+
+        next();
+      });
     });
-  });
-};
+  };
+}
+
+/**
+ * The default middleware (built-in budgets, default nesting depth).
+ */
+export const requestBodyParser: RequestHandler = createRequestBodyParser({
+  budgets: DEFAULT_REQUEST_BUDGETS,
+  maxNestingDepth: DEFAULT_MAX_NESTING_DEPTH,
+});
 
 /**
  * Disable Nest's built-in body parser (`bodyParser: false`) and call this
  * function during bootstrap so that targeted limits are applied before any
  * controller or validation pipe runs.
+ *
+ * When a `ConfigService` is supplied the configured per-route budgets
+ * (`requestSize.routeMaxBytes`), the default budget
+ * (`requestSize.defaultMaxBytes`) and the nesting depth limit
+ * (`requestSize.maxNestingDepth`) are applied.
  */
-export function configureRequestBodyParsing(app: INestApplication): void {
-  app.use(requestBodyParser);
+export function configureRequestBodyParsing(
+  app: INestApplication,
+  configService?: ConfigService,
+): void {
+  const overrides = configService?.get<Record<string, number>>(
+    'requestSize.routeMaxBytes',
+  );
+  const defaultMaxBytes = configService?.get<number>(
+    'requestSize.defaultMaxBytes',
+  );
+  const maxNestingDepth =
+    configService?.get<number>('requestSize.maxNestingDepth') ??
+    DEFAULT_MAX_NESTING_DEPTH;
+
+  app.use(
+    createRequestBodyParser({
+      budgets: resolveRequestBudgets({ overrides, defaultMaxBytes }),
+      maxNestingDepth,
+    }),
+  );
 }

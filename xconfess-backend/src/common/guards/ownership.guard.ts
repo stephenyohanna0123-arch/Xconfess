@@ -9,6 +9,8 @@ import { Reflector } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { OWNERSHIP_META, OwnershipMeta } from '../decorators/ownership.decorator';
+import { CapabilityPolicyService } from '../../auth/capabilities/capability-policy.service';
+import { CAPABILITY_ADMIN } from '../../auth/capabilities/capability.constants';
 
 /**
  * OwnershipGuard — defense-in-depth IDOR prevention.
@@ -50,8 +52,14 @@ export class OwnershipGuard implements CanActivate {
       throw new ForbiddenException('Not authenticated');
     }
 
-    // Admins bypass ownership checks when meta allows it.
-    if (meta.adminBypass && authedUser.role === 'admin') {
+    // Admins bypass ownership checks when meta allows it. The bypass is
+    // resolved through the centralized capability policy (issue #183) so the
+    // decision is never an inline role comparison.
+    const bypassCapability = meta.adminBypassCapability ?? CAPABILITY_ADMIN;
+    if (
+      meta.adminBypass &&
+      CapabilityPolicyService.hasCapability(authedUser, bypassCapability)
+    ) {
       return true;
     }
 

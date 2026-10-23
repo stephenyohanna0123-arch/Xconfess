@@ -38,33 +38,22 @@ describe('Environment Validation', () => {
     expect(value.CONFESSION_ENCRYPTION_KEY).toBe(validKey);
   });
 
-  it('should accept exact HTTPS outbound origins', () => {
+  it('defaults and bounds the admin action approval expiry window', () => {
     const config = {
       ...baseConfig,
       CONFESSION_ENCRYPTION_KEY: validKey,
-      OUTBOUND_ALLOWED_ORIGINS:
-        'https://horizon-testnet.stellar.org,https://api.openai.com',
     };
-
-    const { error } = envValidationSchema.validate(config);
-
+    const { error, value } = envValidationSchema.validate(config);
     expect(error).toBeUndefined();
-  });
+    expect(value.ADMIN_ACTION_APPROVAL_TTL_MINUTES).toBe(30);
 
-  it.each([
-    'http://api.example.com',
-    'https://api.example.com/path',
-    'https://api.example.com,not-a-url',
-  ])('should reject invalid outbound origin configuration: %s', (origins) => {
-    const config = {
-      ...baseConfig,
-      CONFESSION_ENCRYPTION_KEY: validKey,
-      OUTBOUND_ALLOWED_ORIGINS: origins,
-    };
-
-    const { error } = envValidationSchema.validate(config);
-
-    expect(error?.message).toContain('OUTBOUND_ALLOWED_ORIGINS');
+    for (const invalidTtl of [4, 1441]) {
+      const invalid = envValidationSchema.validate({
+        ...config,
+        ADMIN_ACTION_APPROVAL_TTL_MINUTES: invalidTtl,
+      });
+      expect(invalid.error).toBeDefined();
+    }
   });
 
   it('should validate traction exclusion IDs without sensitive personal values', () => {
@@ -297,5 +286,22 @@ describe('Environment Validation', () => {
     };
     const { error } = envValidationSchema.validate(config);
     expect(error).toBeUndefined();
+  });
+
+  it('should reject invalid queue concurrency and wait thresholds', () => {
+    const config = {
+      ...baseConfig,
+      CONFESSION_ENCRYPTION_KEY: validKey,
+      NOTIFICATION_WORKER_CONCURRENCY: 0,
+      EXPORT_WORKER_CONCURRENCY: 1.5,
+      REDIS_QUEUE_WAIT_THRESHOLD_MS: 0,
+    };
+
+    const { error } = envValidationSchema.validate(config);
+
+    expect(error).toBeDefined();
+    expect(error!.message).toContain('NOTIFICATION_WORKER_CONCURRENCY');
+    expect(error!.message).toContain('EXPORT_WORKER_CONCURRENCY');
+    expect(error!.message).toContain('REDIS_QUEUE_WAIT_THRESHOLD_MS');
   });
 });

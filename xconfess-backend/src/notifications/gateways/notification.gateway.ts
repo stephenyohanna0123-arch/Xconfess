@@ -19,6 +19,11 @@ import {
   assertPayloadSize,
   enforceSocketCap,
 } from '../../websocket/ws-memory-guard';
+import {
+  getSocketSignal,
+  isCancelled,
+  runWithCancellation,
+} from '../../common/cancellation/cancellation';
 
 /** Channel prefix for per-user private rooms */
 const USER_ROOM_PREFIX = 'user:';
@@ -221,10 +226,19 @@ export class NotificationGateway
   }
 
   private async emitUnreadSync(client: Socket, userId: string) {
+    // Issue #182: the unread-count sync is a database read. When the socket
+    // disconnects the signal is aborted and the read is abandoned instead of
+    // holding a connection for a result nobody will receive.
+    const signal = getSocketSignal(client);
+
     try {
-      const result = await this.notificationService.getUserNotifications(
-        userId,
-        { page: 1, limit: 20, unreadOnly: true },
+      const result = await runWithCancellation(
+        () =>
+          this.notificationService.getUserNotifications(
+            userId,
+            { page: 1, limit: 20, unreadOnly: true },
+          ),
+        signal,
       );
       client.emit('notifications:sync', {
         notifications: result.notifications,
@@ -232,6 +246,12 @@ export class NotificationGateway
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
+      if (isCancelled(signal)) {
+        this.logger.debug(
+          `Unread notification sync cancelled — client ${client.id} disconnected`,
+        );
+        return;
+      }
       this.logger.error(
         `Failed to sync unread notification count for user ${userId}`,
         error,

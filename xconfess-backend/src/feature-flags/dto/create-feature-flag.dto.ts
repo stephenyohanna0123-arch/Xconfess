@@ -6,6 +6,7 @@ import {
   Max,
   IsOptional,
   IsArray,
+  ArrayMaxSize,
   Matches,
 } from 'class-validator';
 
@@ -30,6 +31,9 @@ export class CreateFeatureFlagDto {
 
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(1000, {
+    message: 'Maximum 1000 user IDs allowed per feature flag',
+  })
   @IsString({ each: true })
   userIds?: string[];
 
@@ -55,6 +59,9 @@ export class UpdateFeatureFlagDto {
 
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(1000, {
+    message: 'Maximum 1000 user IDs allowed per feature flag',
+  })
   @IsString({ each: true })
   userIds?: string[];
 
